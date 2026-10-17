@@ -41,19 +41,28 @@
     for(const k of ['preferred','understood','trustworthy','overwhelming'])STATE.prefs[k]=document.getElementById('p-'+k).value;
     for(const k of ['trust','useful','difficult'])STATE.open[k]=document.getElementById('o-'+k).value.trim();
     STATE.durationMs=Date.now()-(STATE.started||Date.now());
-    const sessions=getSessions(), suspectedDuplicate=sessions.some(s=>s.participant?.id===STATE.participant.id);
+    // Browser storage can be unavailable (for example in restrictive privacy
+    // settings). Do not let a local-storage failure strand the participant on
+    // the final questionnaire; remote collection and the completion screen
+    // must still be allowed to proceed.
+    let sessions=[];
+    try { sessions=getSessions(); } catch (err) { console.warn('Could not read local study records.',err); }
+    const suspectedDuplicate=sessions.some(s=>s.participant?.id===STATE.participant.id);
     const validTrials=STATE.responses.length===30&&new Set(STATE.responses.map(r=>r.scenarioId)).size===30;
     const tooFast=STATE.durationMs<120000||STATE.responses.some(r=>r.responseTimeMs<250);
     STATE.dataQualityFlag=!validTrials?'FAIL':(suspectedDuplicate||tooFast?'WARNING':'PASS');
     const session={sessionId:STATE.sessionId||id(),participant:STATE.participant,consent:{given:true,timestamp:STATE.consentAt},order:STATE.conditionOrder,assignments:STATE.assignments.map(s=>({scenarioId:s.id,condition:s.condition})),responses:STATE.responses,ratings:STATE.ratings,workload:STATE.workload,preferences:STATE.prefs,openText:STATE.open,durationMs:STATE.durationMs,suspectedDuplicate,dataQualityFlag,completedAt:new Date().toISOString(),version:STUDY_CONFIG.STUDY_VERSION};
-    sessions.push(session);localStorage.setItem(STORE,JSON.stringify(sessions));
+    sessions.push(session);
+    let localSaved=true;
+    try { localStorage.setItem(STORE,JSON.stringify(sessions)); }
+    catch (err) { localSaved=false; console.warn('Could not save study record in browser storage.',err); }
     let remote='local';
     if(STUDY_CONFIG.REMOTE_COLLECTION_ENABLED&&STUDY_CONFIG.SHEET_ENDPOINT){
       shell(`<section class="card completion-card"><div class="eyebrow">SAVING YOUR RESPONSES</div><h1>One moment…</h1><p>Your responses have been saved on this device. Sending the study record to the research spreadsheet.</p><div class="progress"><span style="width:70%"></span></div></section>`);
       try{await fetch(STUDY_CONFIG.SHEET_ENDPOINT,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain;charset=UTF-8'},body:JSON.stringify(session),keepalive:true});remote='sent';}catch{remote='failed';}
     }
     STATE.screen='done';
-    const remoteMessage=remote==='sent'?'<p>A submission request was sent to the study collection endpoint. This browser cannot verify that the spreadsheet received it; please contact the researcher if needed.</p>':remote==='failed'?'<p>The remote submission could not be sent. A copy remains in this browser only; contact the researcher before closing this tab so the record can be exported.</p>':'<p>Your responses are stored in this browser only and have not been uploaded. The researcher should export them from this device.</p>';
+    const remoteMessage=remote==='sent'?'<p>A submission request was sent to the study collection endpoint. This browser cannot verify that the spreadsheet received it; please contact the researcher if needed.</p>':remote==='failed'?'<p>The remote submission could not be sent. '+(localSaved?'A copy remains in this browser.':'This browser could not save a local copy.')+' Contact the researcher before closing this tab.</p>':`<p>${localSaved?'Your responses are stored in this browser only and have not been uploaded. The researcher should export them from this device.':'The response could not be saved locally or uploaded. Please contact the researcher and provide this session reference: '+esc(session.sessionId)+'.'}</p>`;
     shell(`<section class="card completion-card"><div class="eyebrow">STUDY COMPLETE</div><h1>Thank you for taking part</h1><div class="completion-time"><span class="time-icon" aria-hidden="true">◷</span><div><span class="section-label">YOUR COMPLETION TIME</span><strong>${formatDuration(STATE.durationMs)}</strong></div></div><p class="small">Session reference: <code>${esc(session.sessionId)}</code>. Keep this code if you want to ask the researcher about withdrawal or a missing submission.</p>${remoteMessage}<p>If you need to withdraw, contact the researcher or ask them to delete the local participant record before it is included in an export.</p><div class="actions">${button('Download a backup for the researcher','backupSession','secondary')}${button('Finish','welcome','secondary')}</div></section>`);
   }
   function getSessions(){try{return JSON.parse(localStorage.getItem(STORE)||'[]')}catch{return []}}
